@@ -7,10 +7,6 @@ use std::error::Error;
 use std::time::Duration;
 
 /// Executes a transfer from one account to another.
-#[expect(
-    dependency_on_unit_never_type_fallback,
-    reason = "I'm pretty sure this can only be fixed with a change to the `redis` crate."
-)]
 fn transfer(
     conn: &mut Connection,
     from: &str,

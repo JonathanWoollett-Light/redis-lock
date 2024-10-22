@@ -15,7 +15,7 @@ uuid = { version = "1.11.0", features=["v4"] }
 rand = "0.8.5"
 
 [lints.rust]
-# TODO Remove this allow.
+# TODO Remove this allow. I'm pretty sure this can only be fixed with a change to the `redis` crate.
 dependency_on_unit_never_type_fallback = "allow"
 
 [lints.clippy]
