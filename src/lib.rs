@@ -1,3 +1,8 @@
+//! Rusty distributed locking backed by Redis.
+//! 
+//! ## Similar work
+//! 
+//! - <https://github.com/hexcowboy/rslock>
 use redis::{Client, Connection, RedisResult};
 use std::error::Error;
 use std::time::Duration;

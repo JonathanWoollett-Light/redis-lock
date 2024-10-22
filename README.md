@@ -5,3 +5,6 @@
 
 Rusty distributed locking backed by Redis.
 
+## Similar work
+
+- https://github.com/hexcowboy/rslock
