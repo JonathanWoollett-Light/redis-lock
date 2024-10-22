@@ -1,10 +1,12 @@
 use rand::Rng;
 use redis::{Client, Commands, Connection, RedisResult};
-use redis_locking::MultiResourceLock;
+use redis_lock::MultiResourceLock;
 use std::error::Error;
 use std::thread;
 use std::time::Duration;
 
+// I'm pretty sure this can only be fixed with a change to the `redis` crate.
+#[allow(dependency_on_unit_never_type_fallback)]
 fn transfer(conn: &mut Connection, from: &str, to: &str, amount: i64) -> RedisResult<()> {
     let from_balance: i64 = conn.get(from)?;
 
@@ -15,9 +17,9 @@ fn transfer(conn: &mut Connection, from: &str, to: &str, amount: i64) -> RedisRe
         let to_balance: i64 = conn.get(to)?;
         conn.set(from, from_balance - amount)?;
         conn.set(to, to_balance + amount)?;
-        println!("Transferred {} from {} to {}", amount, from, to);
+        println!("Transferred {amount} from {from} to {to}");
     } else {
-        println!("Insufficient funds in {}", from);
+        println!("Insufficient funds in {from}");
     }
     Ok(())
 }
@@ -30,33 +32,30 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut rng = rand::thread_rng();
 
-    for _ in 0..10 {
+    for _ in 0..10usize {
         let amount = rng.gen_range(10..=100);
-        let resources = vec!["account1".to_string(), "account2".to_string()];
+        let resources = vec![String::from("account1"), String::from("account2")];
+
+        println!("acquiring lock");
 
         // Try to acquire the lock
-        if let Some(lock_id) = lock.acquire(&resources, 10)? {
-            // Lock acquired, perform the transfer
-            transfer(&mut conn, "account1", "account2", amount)?;
+        let opt = lock.acquire(
+            &resources,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        )?;
+        println!("opt: {opt:?}");
+        let lock_id = opt.unwrap();
+        // Lock acquired, perform the transfer
+        transfer(&mut conn, "account1", "account2", amount)?;
 
-            // Release the lock
-            lock.release(&lock_id)?;
-        } else {
-            println!("Failed to acquire lock, retrying...");
-            thread::sleep(Duration::from_millis(100));
-        }
+        // Release the lock
+        lock.release(&lock_id)?;
 
         // Small delay between operations
         thread::sleep(Duration::from_millis(50));
     }
-
-    // Print final balances
-    let balance1: i64 = conn.get("account1")?;
-    let balance2: i64 = conn.get("account2")?;
-    println!(
-        "Final balances: account1 = {}, account2 = {}",
-        balance1, balance2
-    );
 
     Ok(())
 }

@@ -1,10 +1,14 @@
+use rand::distributions::Standard;
+use rand::prelude::Distribution;
 use rand::Rng;
 use redis::{Client, Commands, Connection, RedisResult};
-use redis_locking::MultiResourceLock;
+use redis_lock::MultiResourceLock;
 use std::error::Error;
 use std::thread;
 use std::time::Duration;
 
+// I'm pretty sure this can only be fixed with a change to the `redis` crate.
+#[allow(dependency_on_unit_never_type_fallback)]
 fn transfer(conn: &mut Connection, from: &str, to: &str, amount: i64) -> RedisResult<()> {
     let from_balance: i64 = conn.get(from)?;
 
@@ -22,6 +26,24 @@ fn transfer(conn: &mut Connection, from: &str, to: &str, amount: i64) -> RedisRe
     Ok(())
 }
 
+enum TransferType {
+    Account1ToAccount2,
+    Account2ToAccount3,
+    Account1ToAccount3,
+}
+
+impl Distribution<TransferType> for Standard {
+    #[inline]
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> TransferType {
+        match rng.gen_range(0..3) {
+            0 => TransferType::Account1ToAccount2,
+            1 => TransferType::Account2ToAccount3,
+            2 => TransferType::Account1ToAccount3,
+            _ => unreachable!(),
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let redis_url = "redis://127.0.0.1/";
     let client = Client::open(redis_url)?;
@@ -30,53 +52,48 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut rng = rand::thread_rng();
 
-    for _ in 0..15 {
+    for _ in 0..10 {
         let amount = rng.gen_range(10..=100);
-        let transfer_type = rng.gen_range(0..3);
+        let transfer_type = rng.gen();
 
         let (from, to, resources) = match transfer_type {
-            0 => (
+            TransferType::Account1ToAccount2 => (
                 "account1",
                 "account2",
-                vec!["account1".to_string(), "account2".to_string()],
+                vec![String::from("account1"), String::from("account2")],
             ),
-            1 => (
+            TransferType::Account2ToAccount3 => (
                 "account2",
                 "account3",
-                vec!["account2".to_string(), "account3".to_string()],
+                vec![String::from("account2"), String::from("account3")],
             ),
-            _ => (
+            TransferType::Account1ToAccount3 => (
                 "account1",
                 "account3",
-                vec!["account1".to_string(), "account3".to_string()],
+                vec![String::from("account1"), String::from("account3")],
             ),
         };
 
-        // Try to acquire the lock
-        if let Some(lock_id) = lock.acquire(&resources, 10)? {
-            // Lock acquired, perform the transfer
-            transfer(&mut conn, from, to, amount)?;
+        println!("acquiring lock");
 
-            // Release the lock
-            lock.release(&lock_id)?;
-        } else {
-            println!("Failed to acquire lock for {} -> {}, retrying...", from, to);
-            thread::sleep(Duration::from_millis(100));
-        }
+        // Try to acquire the lock
+        let opt = lock.lock(
+            &resources,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        )?;
+        println!("opt: {opt:?}");
+        let guard = opt.unwrap();
+
+        // Lock acquired, perform the transfer
+        transfer(&mut conn, from, to, amount)?;
+        // Release the lock
+        drop(guard);
 
         // Small delay between operations
         thread::sleep(Duration::from_millis(50));
     }
-
-    // Print final balances
-    let balance1: i64 = conn.get("account1")?;
-    let balance2: i64 = conn.get("account2")?;
-    let balance3: i64 = conn.get("account3")?;
-    println!(
-        "Final balances: account1 = {}, account2 = {}, account3 = {}",
-        balance1, balance2, balance3
-    );
-    println!("Total balance: {}", balance1 + balance2 + balance3);
 
     Ok(())
 }

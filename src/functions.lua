@@ -1,14 +1,6 @@
 #!lua name=multilock
 
-local function acquire_lock(keys, args)
-    local lock_id = args[1]
-    local expiration = tonumber(args[2])
-    local resources = {}
-    for i = 3, #args do
-        table.insert(resources, args[i])
-    end
-    
-    -- Check for conflicts
+local function check_conflicts(resources)
     for i = 1, #resources do
         local lock_key = "lock:" .. resources[i]
         local existing_lock = redis.call("GET", lock_key)
@@ -17,25 +9,41 @@ local function acquire_lock(keys, args)
             for _, locked_resource in ipairs(lock_info.resources) do
                 for j = 1, #resources do
                     if locked_resource == resources[j] then
-                        return nil  -- Conflict found
+                        return true  -- Conflict found
                     end
                 end
             end
         end
     end
-    
-    -- Acquire locks
+    return false  -- No conflict
+end
+
+local function set_locks(lock_id, resources, expiration)
     local lock_info = cjson.encode({holder = lock_id, resources = resources})
     for i = 1, #resources do
         local lock_key = "lock:" .. resources[i]
         redis.call("SET", lock_key, lock_info, "EX", expiration)
     end
+end
+
+local function acquire_lock(args)
+    local lock_id = args[0]
+    local expiration = tonumber(args[1])
+    local resources = {}
+    for i = 2, #args do
+        table.insert(resources, args[i])
+    end
     
+    if check_conflicts(resources) then
+        return nil  -- Conflict found
+    end
+    
+    set_locks(lock_id, resources, expiration)
     return lock_id
 end
 
-local function release_lock(keys, args)
-    local lock_id = args[1]
+local function release_lock(args)
+    local lock_id = args[0]
     local cursor = "0"
     local keys_to_delete = {}
     
@@ -62,6 +70,6 @@ local function release_lock(keys, args)
     return #keys_to_delete
 end
 
--- Register both functions
+-- Register functions
 redis.register_function('acquire_lock', acquire_lock)
 redis.register_function('release_lock', release_lock)
