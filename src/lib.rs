@@ -63,7 +63,9 @@ impl MultiResourceLock {
         Ok(MultiResourceLock { conn })
     }
 
-    /// Attempts to acquire the lock blocking up to `expiration` until the lock can be acquired.
+    /// Attempts to acquire the lock blocking until the lock can be acquired.
+    /// 
+    /// Blocks up to `timeout` duration making attempts every `sleep` duration.
     ///
     /// Returns `None` when it times out.
     ///
@@ -118,7 +120,7 @@ impl MultiResourceLock {
     /// # Errors
     ///
     /// - When the `release_lock` function is missing from the Redis instance.
-    /// - When `lock_id` is does not refer to a held lock.
+    /// - When `lock_id` does not refer to a held lock.
     #[inline]
     pub fn release(&mut self, lock_id: &str) -> RedisResult<usize> {
         let result: usize = redis::cmd("FCALL")
@@ -131,6 +133,8 @@ impl MultiResourceLock {
 
     /// Attempts to acquire the lock returning immediately if it cannot be immediately acquired.
     ///
+    /// Wraps the result in a guard that releases the lock when dropped.
+    /// 
     /// # Errors
     ///
     /// When [`MultiResourceLock::try_acquire`] errors.
@@ -148,10 +152,14 @@ impl MultiResourceLock {
         })
     }
 
-    /// Attempts to acquire the lock blocking up to `expiration` until the lock can be acquired.
+    /// Attempts to acquire the lock blocking until the lock can be acquired.
+    /// 
+    /// Blocks up to `timeout` duration making attempts every `sleep` duration.
     ///
     /// Returns `None` when it times out.
     ///
+    /// Wraps the result in a guard that releases the lock when dropped.
+    /// 
     /// # Errors
     ///
     /// When [`MultiResourceLock::acquire`] errors.
