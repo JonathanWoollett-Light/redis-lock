@@ -1,61 +1,132 @@
-use redis::{Client, Commands};
-use std::process::{Command, Stdio};
+use redis::Client;
+use serial_test::serial;
+use std::process::Stdio;
+// use futures::prelude::*;
+use redis::AsyncCommands;
+use std::error::Error;
 
+#[cfg(feature = "sync")]
+use redis::Commands;
+
+#[cfg(feature = "sync")]
 const ONE: &str = env!("CARGO_BIN_EXE_one");
+#[cfg(feature = "sync")]
 const TWO: &str = env!("CARGO_BIN_EXE_two");
+const THREE: &str = env!("CARGO_BIN_EXE_three");
+const FOUR: &str = env!("CARGO_BIN_EXE_four");
+
+#[expect(clippy::tests_outside_test_module, reason = "`#[serial]` breaks it")] // TODO Fix this.
+#[test]
+#[serial]
+fn two() -> Result<(), Box<dyn Error>> {
+    tokio::runtime::Runtime::new()?.block_on(async {
+        const N: usize = 10;
+        let redis_url = "redis://127.0.0.1/";
+        let client = Client::open(redis_url)?;
+        let mut conn = client.get_multiplexed_async_connection().await?;
+        // Initialize account balances.
+        redis::cmd("FLUSHALL").exec_async(&mut conn).await?;
+        conn.set::<_, _, ()>("account1", 1000i32).await?;
+        conn.set::<_, _, ()>("account2", 1000i32).await?;
+        conn.set::<_, _, ()>("account3", 1000i32).await?;
+        // Loads functions.
+        redis_lock::setup(&client).await?;
+        // Executes multiple instances of `one.rs` and `two.rs`.
+        let threes = (0..N)
+            .map(|_| {
+                tokio::process::Command::new(THREE)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let fours = (0..N)
+            .map(|_| {
+                tokio::process::Command::new(FOUR)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Waits for all instances to finish.
+        for three in threes {
+            let _output = three.wait_with_output().await?;
+        }
+        for four in fours {
+            let _output = four.wait_with_output().await?;
+        }
+
+        let balance1: i64 = conn.get("account1").await?;
+        let balance2: i64 = conn.get("account2").await?;
+        let balance3: i64 = conn.get("account3").await?;
+        let total_balance = balance1
+            .checked_add(balance2)
+            .ok_or("overflow")?
+            .checked_add(balance3)
+            .ok_or("overflow")?;
+        if total_balance == 3000 {
+            Ok(())
+        } else {
+            Err("Total balance is not 3000".into())
+        }
+    })
+}
 
 // https://www.perplexity.ai/search/is-it-possibly-to-implement-di-PXg_TYNAQ5GfBStsVB1qAw
+#[expect(clippy::tests_outside_test_module, reason = "`#[serial]` breaks it")] // TODO Fix this.
+#[cfg(feature = "sync")]
 #[test]
-fn one() {
+#[serial]
+fn one() -> Result<(), Box<dyn Error>> {
     const N: usize = 10;
 
     let redis_url = "redis://127.0.0.1/";
-    let client = Client::open(redis_url).unwrap();
-    let mut conn = client.get_connection().unwrap();
+    let client = Client::open(redis_url)?;
+    let mut conn = client.get_connection()?;
     // Initialize account balances.
-    redis::cmd("FLUSHALL").query::<()>(&mut conn).unwrap();
-    conn.set::<_, _, ()>("account1", 1000).unwrap();
-    conn.set::<_, _, ()>("account2", 1000).unwrap();
-    conn.set::<_, _, ()>("account3", 1000).unwrap();
+    redis::cmd("FLUSHALL").exec(&mut conn)?;
+    conn.set::<_, _, ()>("account1", 1000i32)?;
+    conn.set::<_, _, ()>("account2", 1000i32)?;
+    conn.set::<_, _, ()>("account3", 1000i32)?;
     // Loads functions.
-    redis_lock::setup(&client).unwrap();
+    redis_lock::sync::setup(&client)?;
     // Executes multiple instances of `one.rs` and `two.rs`.
     let ones = (0..N)
         .map(|_| {
-            Command::new(ONE)
+            std::process::Command::new(ONE)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
-                .unwrap()
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     let twos = (0..N)
         .map(|_| {
-            Command::new(TWO)
+            std::process::Command::new(TWO)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
-                .unwrap()
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     // Waits for all instances to finish.
     for one in ones {
-        let output = one.wait_with_output().unwrap();
-        println!("one output: {output:?}");
+        let _output = one.wait_with_output()?;
     }
     for two in twos {
-        let output = two.wait_with_output().unwrap();
-        println!("two output: {output:?}");
+        let _output = two.wait_with_output()?;
     }
 
-    let balance1: i64 = conn.get("account1").unwrap();
-    let balance2: i64 = conn.get("account2").unwrap();
-    let balance3: i64 = conn.get("account3").unwrap();
-    println!(
-        "Final balances: account1 = {}, account2 = {}, account3 = {}",
-        balance1, balance2, balance3
-    );
-    let total_balance = balance1 + balance2 + balance3;
-    println!("Total balance: {total_balance}");
-    assert_eq!(total_balance, 3000);
+    let balance1: i64 = conn.get("account1")?;
+    let balance2: i64 = conn.get("account2")?;
+    let balance3: i64 = conn.get("account3")?;
+    let total_balance = balance1
+        .checked_add(balance2)
+        .ok_or("overflow")?
+        .checked_add(balance3)
+        .ok_or("overflow")?;
+    if total_balance == 3000 {
+        Ok(())
+    } else {
+        Err("Total balance is not 3000".into())
+    }
 }

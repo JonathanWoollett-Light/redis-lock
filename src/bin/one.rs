@@ -2,7 +2,7 @@
 
 use rand::Rng;
 use redis::{Client, Commands, Connection};
-use redis_lock::MultiResourceLock;
+use redis_lock::sync;
 use std::error::Error;
 use std::time::Duration;
 
@@ -27,11 +27,9 @@ fn transfer(
 fn main() -> Result<(), Box<dyn Error>> {
     let redis_url = "redis://127.0.0.1/";
     let client = Client::open(redis_url)?;
-    let mut lock = MultiResourceLock::new(&client)?;
+    let mut lock = sync::MultiResourceLock::new(&client)?;
     let mut conn = client.get_connection()?;
-
     let mut rng = rand::thread_rng();
-
     for _ in 0..10usize {
         let amount = rng.gen_range(10..=100);
         let resources = vec![String::from("account1"), String::from("account2")];

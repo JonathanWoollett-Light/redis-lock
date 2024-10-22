@@ -9,10 +9,21 @@ repository = "https://github.com/JonathanWoollett-Light/redis-lock"
 documentation = "https://docs.rs/redis-lock/"
 readme = "./README.md"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+sync = []
+
 [dependencies]
-redis = "0.27.5"
+redis = { version = "0.27.5", features = ["aio", "tokio-comp"] }
 uuid = { version = "1.11.0", features=["v4"] }
 rand = "0.8.5"
+tokio = { version = "1.41.0", features = ["full"] }
+
+[dev-dependencies]
+serial_test = "3.1.1"
 
 [lints.rust]
 # TODO Remove this allow. I'm pretty sure this can only be fixed with a change to the `redis` crate.
@@ -45,3 +56,13 @@ bool_assert_comparison = "allow"
 unneeded_field_pattern = "allow"
 single_char_lifetime_names = "allow"
 min_ident_chars = "allow"
+
+[[bin]]
+name = "one"
+path = "src/bin/one.rs"
+required-features = ["sync"]
+
+[[bin]]
+name = "two"
+path = "src/bin/two.rs"
+required-features = ["sync"]
