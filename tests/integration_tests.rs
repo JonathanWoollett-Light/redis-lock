@@ -7,6 +7,8 @@ const TWO: &str = env!("CARGO_BIN_EXE_two");
 // https://www.perplexity.ai/search/is-it-possibly-to-implement-di-PXg_TYNAQ5GfBStsVB1qAw
 #[test]
 fn one() {
+    const N: usize = 10;
+
     let redis_url = "redis://127.0.0.1/";
     let client = Client::open(redis_url).unwrap();
     let mut conn = client.get_connection().unwrap();
@@ -18,7 +20,7 @@ fn one() {
     // Loads functions.
     redis_lock::setup(&client).unwrap();
     // Executes multiple instances of `one.rs` and `two.rs`.
-    let ones = (0..10)
+    let ones = (0..N)
         .map(|_| {
             Command::new(ONE)
                 .stdout(Stdio::piped())
@@ -27,7 +29,7 @@ fn one() {
                 .unwrap()
         })
         .collect::<Vec<_>>();
-    let twos = (0..10)
+    let twos = (0..N)
         .map(|_| {
             Command::new(TWO)
                 .stdout(Stdio::piped())

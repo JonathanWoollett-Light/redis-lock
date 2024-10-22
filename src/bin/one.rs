@@ -1,27 +1,29 @@
 //! Test binary.
 
 use rand::Rng;
-use redis::{Client, Commands, Connection, RedisResult};
+use redis::{Client, Commands, Connection};
 use redis_lock::MultiResourceLock;
 use std::error::Error;
-use std::thread;
 use std::time::Duration;
 
-// I'm pretty sure this can only be fixed with a change to the `redis` crate.
-#[allow(dependency_on_unit_never_type_fallback)]
-fn transfer(conn: &mut Connection, from: &str, to: &str, amount: i64) -> RedisResult<()> {
+/// Executes a transfer from one account to another.
+#[expect(
+    dependency_on_unit_never_type_fallback,
+    reason = "I'm pretty sure this can only be fixed with a change to the `redis` crate."
+)]
+fn transfer(
+    conn: &mut Connection,
+    from: &str,
+    to: &str,
+    amount: i64,
+) -> Result<(), Box<dyn Error>> {
     let from_balance: i64 = conn.get(from)?;
 
-    // Simulate some processing time
-    thread::sleep(Duration::from_millis(100));
-
+    // Only execute the transaction if the sender has enough funds.
     if from_balance >= amount {
         let to_balance: i64 = conn.get(to)?;
-        conn.set(from, from_balance - amount)?;
-        conn.set(to, to_balance + amount)?;
-        println!("Transferred {amount} from {from} to {to}");
-    } else {
-        println!("Insufficient funds in {from}");
+        conn.set(from, from_balance.checked_sub(amount).ok_or("underflow")?)?;
+        conn.set(to, to_balance.checked_add(amount).ok_or("overflow")?)?;
     }
     Ok(())
 }
@@ -38,8 +40,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         let amount = rng.gen_range(10..=100);
         let resources = vec![String::from("account1"), String::from("account2")];
 
-        println!("acquiring lock");
-
         // Try to acquire the lock
         let opt = lock.acquire(
             &resources,
@@ -47,16 +47,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             Duration::from_secs(60),
             Duration::from_secs(1),
         )?;
-        println!("opt: {opt:?}");
-        let lock_id = opt.unwrap();
+        let lock_id = opt.ok_or("timed out")?;
         // Lock acquired, perform the transfer
         transfer(&mut conn, "account1", "account2", amount)?;
 
         // Release the lock
         lock.release(&lock_id)?;
-
-        // Small delay between operations
-        thread::sleep(Duration::from_millis(50));
     }
 
     Ok(())

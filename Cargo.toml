@@ -14,12 +14,13 @@ redis = "0.23.0"
 uuid = { version = "1.11.0", features=["v4"] }
 rand = "0.8.5"
 
+[lints.rust]
+# TODO Remove this allow.
+dependency_on_unit_never_type_fallback = "allow"
+
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 restriction = { level = "warn", priority = -1 }
-
-# TODO Remove this allow.
-dependency_on_unit_never_type_fallback = "allow"
 
 enum_glob_use = "allow"
 match_wildcard_for_single_variants = "allow"
@@ -43,3 +44,4 @@ missing_trait_methods = "allow"
 bool_assert_comparison = "allow"
 unneeded_field_pattern = "allow"
 single_char_lifetime_names = "allow"
+min_ident_chars = "allow"
