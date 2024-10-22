@@ -26,8 +26,7 @@ pub fn setup(client: &redis::Client) -> Result<(), Box<dyn Error>> {
 }
 
 impl MultiResourceLock {
-    pub fn new(redis_url: &str) -> RedisResult<Self> {
-        let client = Client::open(redis_url)?;
+    pub fn new(client: &Client) -> RedisResult<Self> {
         let conn = client.get_connection()?;
         Ok(MultiResourceLock { conn })
     }
@@ -58,5 +57,29 @@ impl MultiResourceLock {
             .query(&mut self.conn)?;
 
         Ok(result)
+    }
+
+    pub fn lock(
+        &mut self,
+        resources: &[String],
+        expiration: usize,
+    ) -> RedisResult<Option<MultiResourceGuard<'_>>> {
+        self.acquire(resources, expiration).map(|result| {
+            result.map(|lock_id| MultiResourceGuard {
+                lock: self,
+                lock_id,
+            })
+        })
+    }
+}
+
+pub struct MultiResourceGuard<'a> {
+    lock: &'a mut MultiResourceLock,
+    lock_id: String,
+}
+
+impl Drop for MultiResourceGuard<'_> {
+    fn drop(&mut self) {
+        self.lock.release(&self.lock_id).unwrap();
     }
 }

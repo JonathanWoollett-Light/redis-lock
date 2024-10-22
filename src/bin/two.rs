@@ -24,8 +24,9 @@ fn transfer(conn: &mut Connection, from: &str, to: &str, amount: i64) -> RedisRe
 
 fn main() -> Result<(), Box<dyn Error>> {
     let redis_url = "redis://127.0.0.1/";
-    let mut lock = MultiResourceLock::new(redis_url)?;
-    let mut conn = Client::open(redis_url)?.get_connection()?;
+    let client = Client::open(redis_url)?;
+    let mut lock = MultiResourceLock::new(&client)?;
+    let mut conn = client.get_connection()?;
 
     let mut rng = rand::thread_rng();
 

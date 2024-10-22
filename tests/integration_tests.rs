@@ -3,6 +3,7 @@ use std::process::{Command, Stdio};
 
 const ONE: &str = env!("CARGO_BIN_EXE_one");
 const TWO: &str = env!("CARGO_BIN_EXE_two");
+const THREE: &str = env!("CARGO_BIN_EXE_three");
 
 // https://www.perplexity.ai/search/is-it-possibly-to-implement-di-PXg_TYNAQ5GfBStsVB1qAw
 #[test]
@@ -35,6 +36,15 @@ fn one() {
                 .unwrap()
         })
         .collect::<Vec<_>>();
+    let threes = (0..10)
+        .map(|_| {
+            Command::new(THREE)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
     // Waits for all instances to finish.
     for one in ones {
         let output = one.wait_with_output().unwrap();
@@ -43,6 +53,10 @@ fn one() {
     for two in twos {
         let output = two.wait_with_output().unwrap();
         println!("two output: {output:?}");
+    }
+    for three in threes {
+        let output = three.wait_with_output().unwrap();
+        println!("three output: {output:?}");
     }
 
     let balance1: i64 = conn.get("account1").unwrap();

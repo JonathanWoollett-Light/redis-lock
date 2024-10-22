@@ -30,19 +30,34 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut rng = rand::thread_rng();
 
-    for _ in 0..10 {
+    for _ in 0..15 {
         let amount = rng.gen_range(10..=100);
-        let resources = vec!["account1".to_string(), "account2".to_string()];
+        let transfer_type = rng.gen_range(0..3);
+
+        let (from, to, resources) = match transfer_type {
+            0 => (
+                "account1",
+                "account2",
+                vec!["account1".to_string(), "account2".to_string()],
+            ),
+            1 => (
+                "account2",
+                "account3",
+                vec!["account2".to_string(), "account3".to_string()],
+            ),
+            _ => (
+                "account1",
+                "account3",
+                vec!["account1".to_string(), "account3".to_string()],
+            ),
+        };
 
         // Try to acquire the lock
-        if let Some(lock_id) = lock.acquire(&resources, 10)? {
+        if let Some(_lock_id) = lock.lock(&resources, 10)? {
             // Lock acquired, perform the transfer
-            transfer(&mut conn, "account1", "account2", amount)?;
-
-            // Release the lock
-            lock.release(&lock_id)?;
+            transfer(&mut conn, from, to, amount)?;
         } else {
-            println!("Failed to acquire lock, retrying...");
+            println!("Failed to acquire lock for {} -> {}, retrying...", from, to);
             thread::sleep(Duration::from_millis(100));
         }
 
@@ -53,10 +68,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Print final balances
     let balance1: i64 = conn.get("account1")?;
     let balance2: i64 = conn.get("account2")?;
+    let balance3: i64 = conn.get("account3")?;
     println!(
-        "Final balances: account1 = {}, account2 = {}",
-        balance1, balance2
+        "Final balances: account1 = {}, account2 = {}, account3 = {}",
+        balance1, balance2, balance3
     );
+    println!("Total balance: {}", balance1 + balance2 + balance3);
 
     Ok(())
 }
