@@ -1,18 +1,21 @@
 #!lua name=multilock
 
 local function acquire_lock(keys, args)
-    local resources = args
     local lock_id = args[1]
     local expiration = tonumber(args[2])
+    local resources = {}
+    for i = 3, #args do
+        table.insert(resources, args[i])
+    end
     
     -- Check for conflicts
-    for i = 3, #resources do
+    for i = 1, #resources do
         local lock_key = "lock:" .. resources[i]
         local existing_lock = redis.call("GET", lock_key)
         if existing_lock then
             local lock_info = cjson.decode(existing_lock)
             for _, locked_resource in ipairs(lock_info.resources) do
-                for j = 3, #resources do
+                for j = 1, #resources do
                     if locked_resource == resources[j] then
                         return nil  -- Conflict found
                     end
@@ -22,8 +25,8 @@ local function acquire_lock(keys, args)
     end
     
     -- Acquire locks
-    local lock_info = cjson.encode({holder = lock_id, resources = {table.unpack(resources, 3)}})
-    for i = 3, #resources do
+    local lock_info = cjson.encode({holder = lock_id, resources = resources})
+    for i = 1, #resources do
         local lock_key = "lock:" .. resources[i]
         redis.call("SET", lock_key, lock_info, "EX", expiration)
     end
@@ -59,5 +62,6 @@ local function release_lock(keys, args)
     return #keys_to_delete
 end
 
+-- Register both functions
 redis.register_function('acquire_lock', acquire_lock)
 redis.register_function('release_lock', release_lock)

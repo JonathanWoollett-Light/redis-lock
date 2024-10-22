@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 const ONE: &str = env!("CARGO_BIN_EXE_one");
 const TWO: &str = env!("CARGO_BIN_EXE_two");
 
+// https://www.perplexity.ai/search/is-it-possibly-to-implement-di-PXg_TYNAQ5GfBStsVB1qAw
 #[test]
 fn one() {
     let redis_url = "redis://127.0.0.1/";
@@ -51,5 +52,7 @@ fn one() {
         "Final balances: account1 = {}, account2 = {}, account3 = {}",
         balance1, balance2, balance3
     );
-    println!("Total balance: {}", balance1 + balance2 + balance3);
+    let total_balance = balance1 + balance2 + balance3;
+    println!("Total balance: {total_balance}");
+    assert_eq!(total_balance, 3000);
 }
