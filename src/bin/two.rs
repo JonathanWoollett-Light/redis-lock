@@ -1,3 +1,5 @@
+//! Test binary.
+
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;

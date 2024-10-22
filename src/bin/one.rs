@@ -1,3 +1,5 @@
+//! Test binary.
+
 use rand::Rng;
 use redis::{Client, Commands, Connection, RedisResult};
 use redis_lock::MultiResourceLock;
