@@ -13,6 +13,7 @@ const ONE: &str = env!("CARGO_BIN_EXE_one");
 const TWO: &str = env!("CARGO_BIN_EXE_two");
 const THREE: &str = env!("CARGO_BIN_EXE_three");
 const FOUR: &str = env!("CARGO_BIN_EXE_four");
+const FIVE: &str = env!("CARGO_BIN_EXE_five");
 
 #[expect(
     clippy::panic_in_result_fn,
@@ -54,6 +55,14 @@ fn two() -> Result<(), Box<dyn Error>> {
                     .spawn()
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let fives = (0..N)
+            .map(|_| {
+                tokio::process::Command::new(FIVE)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Waits for all instances to finish.
         for three in threes {
@@ -63,6 +72,11 @@ fn two() -> Result<(), Box<dyn Error>> {
         }
         for four in fours {
             let output = four.wait_with_output().await?;
+            assert!(output.status.success());
+            assert!(output.stderr.is_empty());
+        }
+        for five in fives {
+            let output = five.wait_with_output().await?;
             assert!(output.status.success());
             assert!(output.stderr.is_empty());
         }
