@@ -1,12 +1,11 @@
+use redis::AsyncCommands as _;
 use redis::Client;
 use serial_test::serial;
-use std::process::Stdio;
-// use futures::prelude::*;
-use redis::AsyncCommands;
 use std::error::Error;
+use std::process::Stdio;
 
 #[cfg(feature = "sync")]
-use redis::Commands;
+use redis::Commands as _;
 
 #[cfg(feature = "sync")]
 const ONE: &str = env!("CARGO_BIN_EXE_one");
@@ -15,7 +14,14 @@ const TWO: &str = env!("CARGO_BIN_EXE_two");
 const THREE: &str = env!("CARGO_BIN_EXE_three");
 const FOUR: &str = env!("CARGO_BIN_EXE_four");
 
-#[expect(clippy::tests_outside_test_module, reason = "`#[serial]` breaks it")] // TODO Fix this.
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "It's annoying to handle the error here."
+)]
+#[expect(
+    clippy::tests_outside_test_module,
+    reason = "`#[serial]` break this lint"
+)] // TODO Fix this.
 #[test]
 #[serial]
 fn two() -> Result<(), Box<dyn Error>> {
@@ -51,10 +57,14 @@ fn two() -> Result<(), Box<dyn Error>> {
 
         // Waits for all instances to finish.
         for three in threes {
-            let _output = three.wait_with_output().await?;
+            let output = three.wait_with_output().await?;
+            assert!(output.status.success());
+            assert!(output.stderr.is_empty());
         }
         for four in fours {
-            let _output = four.wait_with_output().await?;
+            let output = four.wait_with_output().await?;
+            assert!(output.status.success());
+            assert!(output.stderr.is_empty());
         }
 
         let balance1: i64 = conn.get("account1").await?;

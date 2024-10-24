@@ -1,8 +1,8 @@
 //! Test binary.
 
-use rand::Rng;
+use rand::Rng as _;
 use redis::aio::MultiplexedConnection;
-use redis::{AsyncCommands, Client};
+use redis::{AsyncCommands as _, Client};
 use redis_lock::MultiResourceLock;
 use std::error::Error;
 use std::time::Duration;
@@ -43,8 +43,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .acquire(
                 &resources,
                 Duration::from_secs(60),
-                Duration::from_secs(60),
-                Duration::from_secs(1),
+                Duration::from_secs(2),
+                Duration::from_millis(100),
             )
             .await?;
         let lock_id = opt.ok_or("timed out")?;

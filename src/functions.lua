@@ -26,12 +26,16 @@ local function set_locks(lock_id, resources, expiration)
     end
 end
 
-local function acquire_lock(args)
-    local lock_id = args[0]
-    local expiration = tonumber(args[1])
+local function acquire_lock(keys, args)
+    local lock_id = args[1]
+    local expiration = tonumber(args[2])
     local resources = {}
-    for i = 2, #args do
+    for i = 3, #args do
         table.insert(resources, args[i])
+    end
+    
+    if #resources == 0 then
+        return redis.error_reply("No resources specified")
     end
     
     if check_conflicts(resources) then
@@ -42,8 +46,8 @@ local function acquire_lock(args)
     return lock_id
 end
 
-local function release_lock(args)
-    local lock_id = args[0]
+local function release_lock(keys, args)
+    local lock_id = args[1]
     local cursor = "0"
     local keys_to_delete = {}
     

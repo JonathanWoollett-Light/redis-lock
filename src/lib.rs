@@ -10,26 +10,11 @@
 //! # let client = todo!();
 //! // Setup.
 //! redis_lock::setup(&client).await?;
+//! // Get lock.
 //! let mut lock = redis_lock::MultiResourceLock::new(client.clone())?;
-//! let mut conn = client.get_multiplexed_async_connection().await?;
-//! let from = "account1";
-//! let to = "account2";
-//! let resources = vec![String::from(from), String::from(to)];
-//! // Acquire lock.
-//! let opt = lock.lock_default(&resources).await?;
-//! let guard = opt.ok_or("timed out")?;
-//! // Perform transfer.
-//! let amount = 500;
-//! let from_balance: i64 = conn.get("account1").await?;
-//! // Execute transaction if the sender has enough funds.
-//! if from_balance >= amount {
-//!     let to_balance: i64 = conn.get(to).await?;
-//!     let new_from = from_balance.checked_sub(amount).ok_or("underflow")?;
-//!     conn.set(from, new_from).await?;
-//!     let new_to = to_balance.checked_add(amount).ok_or("overflow")?;
-//!     conn.set(to, new_to).await?;
-//! }
-//! // Lock releases when dropped.
+//! let resources = vec![String::from("account1"), String::from("account2")];
+//! // Execute a function with the lock.
+//! lock.map_default(&resources, async move { /* .. */ }).await?;
 //! # Ok(())
 //! # })
 //! # }
@@ -45,11 +30,12 @@
 //!
 //! - <https://github.com/hexcowboy/rslock>
 
-use redis::{Client, RedisResult};
+use displaydoc::Display;
+use redis::{Client, RedisError, RedisResult};
 use std::error::Error;
+use std::future::Future;
 use std::time::Duration;
-use tokio::runtime::Handle;
-use tokio::task;
+use thiserror::Error;
 use uuid::Uuid;
 
 /// Synchronous implementation of the lock.
@@ -197,6 +183,7 @@ impl MultiResourceLock {
 
         let result: Option<String> = redis::cmd("FCALL")
             .arg("acquire_lock")
+            .arg(0i32)
             .arg(&args)
             .query_async(&mut connection)
             .await?;
@@ -215,6 +202,7 @@ impl MultiResourceLock {
         let mut connection = self.client.get_multiplexed_async_connection().await?;
         let result: usize = redis::cmd("FCALL")
             .arg("release_lock")
+            .arg(0i32)
             .arg(lock_id)
             .query_async(&mut connection)
             .await?;
@@ -222,116 +210,61 @@ impl MultiResourceLock {
         Ok(result)
     }
 
-    /// Calls [`MultiResourceLock::try_lock`] with [`DEFAULT_EXPIRATION`].
+    /// Since we cannot safely drop a guard in an async context, we need to provide a way to release the lock in case of an error.
     ///
-    /// # Errors
-    ///
-    /// When [`MultiResourceLock::try_lock`] errors.
+    /// This is the suggested approach, it is less ergonomic but it is safe.
     #[inline]
-    pub async fn try_lock_default(
-        &mut self,
-        resources: &[String],
-    ) -> RedisResult<Option<MultiResourceGuard>> {
-        self.try_lock(resources, DEFAULT_EXPIRATION).await
-    }
-
-    /// Attempts to acquire the lock returning immediately if it cannot be immediately acquired.
-    ///
-    /// Wraps the result in a guard that releases the lock when dropped.
-    ///
-    /// # Errors
-    ///
-    /// When [`MultiResourceLock::try_acquire`] errors.
-    #[inline]
-    pub async fn try_lock(
-        &mut self,
-        resources: &[String],
-        expiration: Duration,
-    ) -> RedisResult<Option<MultiResourceGuard<'_>>> {
-        self.try_acquire(resources, expiration).await.map(|result| {
-            result.map(|lock_id| MultiResourceGuard {
-                lock: self,
-                lock_id,
-                rt: Handle::current(),
-            })
-        })
-    }
-
-    /// Calls [`MultiResourceLock::lock`] with [`DEFAULT_EXPIRATION`], [`DEFAULT_TIMEOUT`] and [`DEFAULT_SLEEP`].
-    ///
-    /// # Errors
-    ///
-    /// When [`MultiResourceLock::lock`] errors.
-    #[inline]
-    pub async fn lock_default(
-        &mut self,
-        resources: &[String],
-    ) -> RedisResult<Option<MultiResourceGuard<'_>>> {
-        self.lock(
-            resources,
-            DEFAULT_EXPIRATION,
-            DEFAULT_TIMEOUT,
-            DEFAULT_SLEEP,
-        )
-        .await
-    }
-
-    /// Attempts to acquire the lock blocking until the lock can be acquired.
-    ///
-    /// Blocks up to `timeout` duration making attempts every `sleep` duration.
-    ///
-    /// Returns `None` when it times out.
-    ///
-    /// Wraps the result in a guard that releases the lock when dropped.
-    ///
-    /// # Errors
-    ///
-    /// When [`MultiResourceLock::acquire`] errors.
-    #[inline]
-    pub async fn lock(
+    pub async fn map<F>(
         &mut self,
         resources: &[String],
         expiration: Duration,
         timeout: Duration,
         sleep: Duration,
-    ) -> RedisResult<Option<MultiResourceGuard<'_>>> {
-        self.acquire(resources, expiration, timeout, sleep)
+        f: F,
+    ) -> Result<F::Output, MapError>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let lock_id = self
+            .acquire(resources, expiration, timeout, sleep)
             .await
-            .map(|result| {
-                result.map(|lock_id| MultiResourceGuard {
-                    lock: self,
-                    lock_id,
-                    rt: Handle::current(),
-                })
-            })
+            .map_err(MapError::Acquire)?
+            .ok_or(MapError::Timeout)?;
+        let result = f.await;
+        self.release(&lock_id).await.map_err(MapError::Release)?;
+        Ok(result)
     }
-}
 
-/// A guard that releases the lock when it is dropped.
-#[derive(Debug)]
-pub struct MultiResourceGuard<'a> {
-    /// The lock instance.
-    lock: &'a mut MultiResourceLock,
-    /// The lock identifier.
-    lock_id: String,
-    /// Handle to the tokio runtime.
-    rt: Handle,
-}
-
-#[expect(
-    clippy::unwrap_used,
-    reason = "You can't propagate errors in a `Drop` implementation."
-)]
-impl Drop for MultiResourceGuard<'_> {
+    /// Calls [`MultiResourceLock::map`] with [`DEFAULT_EXPIRATION`], [`DEFAULT_TIMEOUT`] and [`DEFAULT_SLEEP`].
     #[inline]
-    fn drop(&mut self) {
-        let mut lock = MultiResourceLock {
-            client: self.lock.client.clone(),
-        };
-        let lock_id = self.lock_id.clone();
-        let rt = self.rt.clone();
-        task::spawn_blocking(move || {
-            rt.block_on(async { lock.release(&lock_id).await }).unwrap();
-        });
+    pub async fn map_default<F>(
+        &mut self,
+        resources: &[String],
+        f: F,
+    ) -> Result<F::Output, MapError>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.map(
+            resources,
+            DEFAULT_EXPIRATION,
+            DEFAULT_TIMEOUT,
+            DEFAULT_SLEEP,
+            f,
+        )
+        .await
     }
+}
+
+/// Error for [`MultiResourceLock::map`].
+#[derive(Debug, Display, Error)]
+pub enum MapError {
+    /// Timed out attempting to acquire the lock.
+    Timeout,
+    /// Failed to acquire lock: {0}
+    Acquire(RedisError),
+    /// Failed to release lock: {0}
+    Release(RedisError),
 }

@@ -132,6 +132,7 @@ impl MultiResourceLock {
 
         let result: Option<String> = redis::cmd("FCALL")
             .arg("acquire_lock")
+            .arg(0i32)
             .arg(&args)
             .query(&mut self.conn)?;
 
@@ -148,6 +149,7 @@ impl MultiResourceLock {
     pub fn release(&mut self, lock_id: &str) -> RedisResult<usize> {
         let result: usize = redis::cmd("FCALL")
             .arg("release_lock")
+            .arg(0i32)
             .arg(lock_id)
             .query(&mut self.conn)?;
 

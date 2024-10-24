@@ -1,31 +1,52 @@
 //! Test binary.
 
+use displaydoc::Display;
 use rand::distributions::Standard;
 use rand::prelude::Distribution;
 use rand::Rng;
-use redis::aio::MultiplexedConnection;
-use redis::AsyncCommands;
+use redis::AsyncCommands as _;
 use redis::Client;
+use redis::RedisError;
 use redis_lock::MultiResourceLock;
 use std::error::Error;
 use std::time::Duration;
+use thiserror::Error;
+
+#[derive(Debug, Display, Error)]
+enum TransferError {
+    /// Failed to open connection: {0}
+    Connection(RedisError),
+    /// Failed to get from balance: {0}
+    GetFrom(RedisError),
+    /// Failed to get to balance: {0}
+    GetTo(RedisError),
+    /// Failed to set from balance: {0}
+    SetFrom(RedisError),
+    /// Failed to set to balance:{0}
+    SetTo(RedisError),
+}
 
 /// Executes a transfer from one account to another.
-async fn transfer(
-    conn: &mut MultiplexedConnection,
-    from: &str,
-    to: &str,
-    amount: i64,
-) -> Result<(), Box<dyn Error>> {
-    let from_balance: i64 = conn.get(from).await?;
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "We check the arithmetic is valid with the if statement."
+)]
+async fn transfer(client: Client, from: &str, to: &str, amount: i64) -> Result<(), TransferError> {
+    let mut conn = client
+        .get_multiplexed_async_connection()
+        .await
+        .map_err(TransferError::Connection)?;
+    let from_balance: i64 = conn.get(from).await.map_err(TransferError::GetFrom)?;
 
     // Only execute the transaction if the sender has enough funds.
     if from_balance >= amount {
-        let to_balance: i64 = conn.get(to).await?;
-        conn.set(from, from_balance.checked_sub(amount).ok_or("underflow")?)
-            .await?;
-        conn.set(to, to_balance.checked_add(amount).ok_or("overflow")?)
-            .await?;
+        let to_balance: i64 = conn.get(to).await.map_err(TransferError::GetTo)?;
+        conn.set::<_, _, ()>(from, from_balance - amount)
+            .await
+            .map_err(TransferError::SetFrom)?;
+        conn.set::<_, _, ()>(to, to_balance + amount)
+            .await
+            .map_err(TransferError::SetTo)?;
     }
     Ok(())
 }
@@ -58,7 +79,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let redis_url = "redis://127.0.0.1/";
     let client = Client::open(redis_url)?;
     let mut lock = MultiResourceLock::new(client.clone())?;
-    let mut conn = client.get_multiplexed_async_connection().await?;
 
     let mut rng = rand::thread_rng();
 
@@ -85,20 +105,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         };
 
         // Try to acquire the lock
-        let opt = lock
-            .lock(
-                &resources,
-                Duration::from_secs(60),
-                Duration::from_secs(60),
-                Duration::from_secs(1),
-            )
-            .await?;
-        let guard = opt.ok_or("Timed out")?;
-
-        // Lock acquired, perform the transfer
-        transfer(&mut conn, from, to, amount).await?;
-        // Release the lock
-        drop(guard);
+        let cloned_client = client.clone();
+        lock.map(
+            &resources,
+            Duration::from_secs(60),
+            Duration::from_secs(2),
+            Duration::from_millis(100),
+            async move { transfer(cloned_client, from, to, amount).await },
+        )
+        .await??;
     }
 
     Ok(())

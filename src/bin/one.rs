@@ -1,7 +1,7 @@
 //! Test binary.
 
-use rand::Rng;
-use redis::{Client, Commands, Connection};
+use rand::Rng as _;
+use redis::{Client, Commands as _, Connection};
 use redis_lock::sync;
 use std::error::Error;
 use std::time::Duration;
@@ -38,8 +38,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let opt = lock.acquire(
             &resources,
             Duration::from_secs(60),
-            Duration::from_secs(60),
-            Duration::from_secs(1),
+            Duration::from_secs(2),
+            Duration::from_millis(100),
         )?;
         let lock_id = opt.ok_or("timed out")?;
         // Lock acquired, perform the transfer
