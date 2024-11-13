@@ -31,12 +31,17 @@
 //! - <https://github.com/hexcowboy/rslock>
 
 use displaydoc::Display;
-use redis::{Client, RedisError, RedisResult};
+use redis::Client;
 use std::error::Error;
 use std::future::Future;
 use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
+
+/// Re-export of [`redis::RedisError`].
+pub type RedisError = redis::RedisError;
+/// Mimic of [`redis::RedisResult`].
+pub type RedisResult<T> = Result<T, RedisError>;
 
 /// Synchronous implementation of the lock.
 #[cfg(feature = "sync")]
@@ -210,6 +215,7 @@ impl MultiResourceLock {
         Ok(result)
     }
 
+    // TODO Catch panics in `f`.
     /// Since we cannot safely drop a guard in an async context, we need to provide a way to release the lock in case of an error.
     ///
     /// This is the suggested approach, it is less ergonomic but it is safe.
