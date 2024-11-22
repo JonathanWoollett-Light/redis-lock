@@ -12,6 +12,7 @@ use std::error::Error;
 use std::time::Duration;
 use thiserror::Error;
 
+/// Errors that can occur during a check.
 #[derive(Debug, Display, Error)]
 enum CheckError {
     /// Failed to open connection: {0}

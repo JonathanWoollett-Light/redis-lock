@@ -1,8 +1,14 @@
 use redis::AsyncCommands as _;
 use redis::Client;
+use redis_lock::LockAcrossOptions;
 use serial_test::serial;
 use std::error::Error;
 use std::process::Stdio;
+
+// Run the redis container with
+// ```
+// docker run -d --name my-redis-stack -p 6379:6379  redis/redis-stack-server:latest
+// ```
 
 #[cfg(feature = "sync")]
 use redis::Commands as _;
@@ -14,6 +20,8 @@ const TWO: &str = env!("CARGO_BIN_EXE_two");
 const THREE: &str = env!("CARGO_BIN_EXE_three");
 const FOUR: &str = env!("CARGO_BIN_EXE_four");
 const FIVE: &str = env!("CARGO_BIN_EXE_five");
+
+const REDIS_URL: &str = "redis://127.0.0.1/";
 
 #[expect(
     clippy::panic_in_result_fn,
@@ -28,8 +36,7 @@ const FIVE: &str = env!("CARGO_BIN_EXE_five");
 fn two() -> Result<(), Box<dyn Error>> {
     tokio::runtime::Runtime::new()?.block_on(async {
         const N: usize = 10;
-        let redis_url = "redis://127.0.0.1/";
-        let client = Client::open(redis_url)?;
+        let client = Client::open(REDIS_URL)?;
         let mut conn = client.get_multiplexed_async_connection().await?;
         // Initialize account balances.
         redis::cmd("FLUSHALL").exec_async(&mut conn).await?;
@@ -104,9 +111,7 @@ fn two() -> Result<(), Box<dyn Error>> {
 #[serial]
 fn one() -> Result<(), Box<dyn Error>> {
     const N: usize = 10;
-
-    let redis_url = "redis://127.0.0.1/";
-    let client = Client::open(redis_url)?;
+    let client = Client::open(REDIS_URL)?;
     let mut conn = client.get_connection()?;
     // Initialize account balances.
     redis::cmd("FLUSHALL").exec(&mut conn)?;
@@ -153,4 +158,62 @@ fn one() -> Result<(), Box<dyn Error>> {
     } else {
         Err("Total balance is not 3000".into())
     }
+}
+
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "It's annoying to handle the error here."
+)]
+#[expect(
+    clippy::tests_outside_test_module,
+    reason = "`#[serial]` break this lint"
+)] // TODO Fix this.
+#[test]
+#[serial]
+fn single() -> Result<(), Box<dyn Error>> {
+    tokio::runtime::Runtime::new()?.block_on(async {
+        tracing_subscriber::fmt::fmt()
+            .with_max_level(tracing::level_filters::LevelFilter::WARN)
+            .init();
+        const N: usize = 100;
+        let client = Client::open(REDIS_URL)?;
+        let connection = std::sync::Arc::new(tokio::sync::Mutex::new(
+            client.get_multiplexed_async_connection().await?,
+        ));
+        // Reset database.
+        redis::cmd("FLUSHALL")
+            .exec_async(&mut *connection.lock().await)
+            .await?;
+        // Set state.
+        let mut x: usize = 0;
+        let ptr = &mut x as *mut usize as usize;
+        // Execute racy functions with lock.
+
+        let futures = (0..N)
+            .map(|_| {
+                let cconnection = connection.clone();
+                tokio::task::spawn(async move {
+                    let _ = redis_lock::lock_across(
+                        &[cconnection],
+                        "resource",
+                        async move {
+                            let x: &mut usize = unsafe { &mut *(ptr as *mut usize) };
+                            *x += 1;
+                        },
+                        LockAcrossOptions::default(),
+                    )
+                    .await;
+                })
+            })
+            .collect::<Vec<_>>();
+        // let bar = indicatif::ProgressBarr::new(N as u64);
+        for future in futures {
+            future.await?;
+            // bar.inc(1);
+        }
+        // bar.finish();
+        // Assert state.
+        assert_eq!(x, N);
+        Ok(())
+    })
 }

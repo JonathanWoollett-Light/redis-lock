@@ -2,6 +2,33 @@
 
 //! Rusty distributed locking backed by Redis.
 //!
+//! ## Locking a single resource
+//!
+//! ```no_run
+//! # use redis::AsyncCommands;
+//! # use tokio::sync::Mutex;
+//! # use std::sync::Arc;
+//! # #[allow(dependency_on_unit_never_type_fallback)]
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # tokio::runtime::Runtime::new()?.block_on(async {
+//! # let client: redis::Client = todo!();
+//! let connection = Arc::new(Mutex::new(
+//!     client.get_multiplexed_async_connection().await?
+//! ));
+//! // Execute a function with the lock.
+//! redis_lock::lock_across(
+//!     &[connection],
+//!     "account1",
+//!     async move { /* .. */ },
+//!     redis_lock::LockAcrossOptions::default()
+//! ).await?;
+//! # Ok(())
+//! # })
+//! # }
+//! ```
+//!
+//! ## Locking multiple resources
+//!
 //! ```no_run
 //! # use redis::AsyncCommands;
 //! # #[allow(dependency_on_unit_never_type_fallback)]
@@ -48,9 +75,15 @@ pub type RedisResult<T> = Result<T, RedisError>;
 #[cfg_attr(docsrs, doc(cfg(feature = "sync")))]
 pub mod sync;
 
+mod single;
+pub use single::*;
+
 /// A distributed mutual exclusion lock backed by Redis.
 ///
 /// Supports exclusion based on multiple resources and partial overlaps.
+///
+/// This is much less efficient than [`lock_across`]. Ideally you should architect your
+/// application so you never need [`MultiResourceLock`].
 ///
 /// E.g. a lock on resources `["a", "b"]` will block a lock on `["a"]` or `["b", "c"]`.
 pub struct MultiResourceLock {

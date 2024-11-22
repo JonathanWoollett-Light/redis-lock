@@ -12,6 +12,7 @@ use std::error::Error;
 use std::time::Duration;
 use thiserror::Error;
 
+/// Errors that can occur during a transfer.
 #[derive(Debug, Display, Error)]
 enum TransferError {
     /// Failed to open connection: {0}
