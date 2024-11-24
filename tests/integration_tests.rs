@@ -186,7 +186,7 @@ fn single() -> Result<(), Box<dyn Error>> {
             .await?;
         // Set state.
         let mut x: usize = 0;
-        let ptr = &mut x as *mut usize as usize;
+        let ptr = std::ptr::from_mut::<usize>(&mut x) as usize;
         // Execute racy functions with lock.
 
         let futures = (0..N)
@@ -199,6 +199,7 @@ fn single() -> Result<(), Box<dyn Error>> {
                         async move {
                             let x: &mut usize = unsafe { &mut *(ptr as *mut usize) };
                             *x += 1;
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         },
                         LockAcrossOptions::default(),
                     )
@@ -206,7 +207,7 @@ fn single() -> Result<(), Box<dyn Error>> {
                 })
             })
             .collect::<Vec<_>>();
-        // let bar = indicatif::ProgressBarr::new(N as u64);
+        // let bar = indicatif::ProgressBar::new(N as u64);
         for future in futures {
             future.await?;
             // bar.inc(1);

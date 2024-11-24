@@ -1,9 +1,13 @@
+use displaydoc::Display;
+use futures::future::FutureExt;
+use futures::stream::{FuturesUnordered, StreamExt};
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use thiserror::Error;
 use tokio::sync::Mutex;
-use tokio::sync::MutexGuard;
-use tracing::{trace, warn};
+use tracing::trace;
 
 /// The prefix for the lock key.
 const LOCK_KEY_PREFIX: &str = "redlock:";
@@ -102,41 +106,50 @@ pub async fn lock_across<C, F>(
     resource: &str,
     f: F,
     options: LockAcrossOptions,
-) -> Result<F::Output, redis::RedisError>
+) -> Result<F::Output, LockAcrossError>
 where
-    C: redis::aio::ConnectionLike,
+    C: redis::aio::ConnectionLike + Send + 'static,
     F: Future + 'static,
     F::Output: 'static,
 {
     trace!("acquiring lock");
-    let lock_opt = acquire_lock(connections, resource, options).await?;
+    let lock = acquire_lock(connections, resource, options)
+        .await
+        .map_err(LockAcrossError::Acquire)?;
+    trace!("acquired lock");
 
-    if let Some(lock) = lock_opt {
-        trace!("acquired lock");
+    // Execute the provided function
+    trace!("executing function");
+    let output = AssertUnwindSafe(f)
+        .catch_unwind()
+        .await
+        .map_err(LockAcrossError::Panic);
+    trace!("executed function");
 
-        // Execute the provided function
-        let output = f.await;
-        trace!("executed function");
+    // Release the lock
+    trace!("releasing lock");
+    release_lock(connections, &lock)
+        .await
+        .map_err(LockAcrossError::Release)?;
+    trace!("released lock");
+    // We propagate panic errors after releasing the lock.
+    output
+}
 
-        // Get the connections back for releasing the lock
-        let mut release_connections = Vec::new();
-        for conn_future in connections {
-            trace!("getting connection");
-            release_connections.push(conn_future.lock().await);
-            trace!("acquired connection");
-        }
+#[derive(Debug, Error, Display)]
+pub enum LockAcrossError {
+    /// Failed to acquire lock: {0}
+    Acquire(AcquireLockError),
+    /// The function paniced.
+    Panic(Box<dyn std::any::Any + std::marker::Send>),
+    /// Failed to release lock: {0}
+    Release(ReleaseLockError),
+}
 
-        // Release the lock
-        trace!("releasing lock");
-        release_lock(&mut release_connections, &lock).await?;
-        trace!("released lock");
-        Ok(output)
-    } else {
-        Err(redis::RedisError::from((
-            redis::ErrorKind::IoError,
-            "Failed to acquire lock",
-        )))
-    }
+#[derive(Debug, Error, Display)]
+pub enum AcquireLockError {
+    /// Failed to acquire lock: {0}
+    Failed(String),
 }
 
 /// Attempts to acquire a lock on multiple connections.
@@ -151,31 +164,51 @@ where
     clippy::integer_division,
     reason = "I can't be bothered to fix these right now."
 )]
-async fn acquire_lock<'a, C: redis::aio::ConnectionLike>(
+async fn acquire_lock<C: redis::aio::ConnectionLike>(
     connections: &[Arc<Mutex<C>>],
     resource: &str,
     options: LockAcrossOptions,
-) -> Result<Option<Lock>, redis::RedisError> {
+) -> Result<Lock, AcquireLockError> {
     let value = uuid::Uuid::new_v4().to_string();
     let resource_key = format!("{LOCK_KEY_PREFIX}{resource}");
     let quorum = (connections.len() / 2) + 1;
+    let ttl_millis = options.ttl.as_millis() as u64;
+
     let outer_start = Instant::now();
     let mut attempts = 0u64;
-    let ttl_millis = options.ttl.as_millis() as u64;
 
     while outer_start.elapsed() < options.duration {
         attempts += 1;
         trace!("Attempting to acquire lock (attempt {attempts})");
-        let mut successful_locks = Vec::new();
-        let start = Instant::now();
 
-        for conn_future in connections {
-            trace!("getting connection");
-            let mut conn = conn_future.lock().await;
-            if let Ok(true) = try_acquire_lock(&mut *conn, &resource_key, &value, ttl_millis).await
-            {
-                trace!("acquired lock");
-                successful_locks.push(conn);
+        let mut futures = FuturesUnordered::new();
+        for conn in connections {
+            let cconn = Arc::clone(conn);
+            let cresource_key = resource_key.clone();
+            let cvalue = value.clone();
+            futures.push(async move {
+                let mut guard = cconn.lock().await;
+                try_acquire_lock(&mut *guard, &cresource_key, &cvalue, ttl_millis).await
+            });
+        }
+
+        let start = Instant::now();
+        let mut successful_locks = 0;
+        let mut failed_locks = 0;
+
+        while let Some(result) = futures.next().await {
+            if let Ok(true) = result {
+                successful_locks += 1;
+                // If quorum is achieved, break early
+                if successful_locks >= quorum {
+                    break;
+                }
+            } else {
+                failed_locks += 1;
+                // If quorum is unachievable, break early
+                if failed_locks > connections.len() - quorum {
+                    break;
+                }
             }
         }
 
@@ -183,33 +216,23 @@ async fn acquire_lock<'a, C: redis::aio::ConnectionLike>(
         let elapsed = start.elapsed().as_millis() as u64;
         let validity_time = ttl_millis.saturating_sub(elapsed).saturating_sub(drift);
 
-        if successful_locks.len() >= quorum && validity_time > 0 {
+        if successful_locks >= quorum && validity_time > 0 {
             trace!("Lock acquired successfully");
-            return Ok(Some(Lock {
+            return Ok(Lock {
                 resource: resource_key,
                 value,
                 validity_time: Duration::from_millis(validity_time),
-            }));
-        }
-        trace!(
-            "Failed to acquire lock, releasing {} successful locks",
-            successful_locks.len()
-        );
-        for mut conn in successful_locks {
-            if let Err(e) = release_lock_on_connection(&mut *conn, &resource_key, &value).await {
-                trace!("Error releasing lock: {:?}", e);
-            }
+            });
         }
 
-        trace!("Waiting before next attempt");
+        trace!("Failed to acquire lock, waiting before next attempt");
         tokio::time::sleep(options.retry).await;
     }
 
-    warn!(
+    Err(AcquireLockError::Failed(format!(
         "Failed to acquire lock after {:?} and {attempts} attempts",
         options.duration
-    );
-    Ok(None)
+    )))
 }
 
 /// Attempts to acquire a lock on a connection.
@@ -231,14 +254,34 @@ async fn try_acquire_lock<C: redis::aio::ConnectionLike>(
     Ok(result.is_some())
 }
 
+#[derive(Debug, Error, Display)]
+pub enum ReleaseLockError {
+    /// Failed to join task: {0}
+    Join(tokio::task::JoinError),
+    /// Failed to release lock: {0}
+    Release(redis::RedisError),
+}
+
 /// Releases a lock on multiple connections.
-async fn release_lock<C: redis::aio::ConnectionLike>(
-    connections: &mut [MutexGuard<'_, C>],
+async fn release_lock<C: redis::aio::ConnectionLike + Send + 'static>(
+    connections: &[Arc<Mutex<C>>],
     lock: &Lock,
-) -> Result<(), redis::RedisError> {
-    for conn in connections.iter_mut() {
-        let x: &mut C = &mut *conn;
-        release_lock_on_connection(x, &lock.resource, &lock.value).await?;
+) -> Result<(), ReleaseLockError> {
+    let futures = connections.iter().map(|conn| {
+        let cconn = Arc::clone(conn);
+        let cresource = lock.resource.clone();
+        let cvalue = lock.value.clone();
+        tokio::spawn(async move {
+            let mut guard = cconn.lock().await;
+            release_lock_on_connection(&mut *guard, &cresource, &cvalue).await
+        })
+    });
+
+    let results = futures::future::join_all(futures).await;
+    for result in results {
+        result
+            .map_err(ReleaseLockError::Join)?
+            .map_err(ReleaseLockError::Release)?;
     }
     Ok(())
 }
